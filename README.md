@@ -1,1 +1,1 @@
-# Mutual-Fund--Analyzer
+# fund-analyzer
