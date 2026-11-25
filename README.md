@@ -4,7 +4,10 @@ Analyse any Indian mutual fund from its past NAV data: returns, risk, a growth c
 SIP / lumpsum "what if I had invested" backtests. Full-stack project with a **FastAPI + pandas**
 backend and a **React** frontend.
 
-**[Watch the 43-second walkthrough](docs/demo.mp4)**
+
+https://github.com/user-attachments/assets/f80f6bf1-d57d-4132-a7b7-22f902341584
+
+
 
 ## Screenshots
 
