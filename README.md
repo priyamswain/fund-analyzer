@@ -93,7 +93,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 for the app and http://localhost:8000/dashboard for the backend dashboard.
+**Live demo: https://priyamswain.github.io/fund-analyzer/**
 
 ## How the numbers are worked out
 
