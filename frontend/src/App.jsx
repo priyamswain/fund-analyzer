@@ -2,8 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AreaChart, Area, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer,
 } from "recharts";
-
-const API = "http://localhost:8000";
+import * as api from "./engine.js";
 
 const SUGGESTIONS = [
   "parag parikh flexi cap",
@@ -78,7 +77,123 @@ function SimTip({ active, payload }) {
   );
 }
 
+function fmtUptime(s) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h > 0 ? h + "h " + m + "m" : m + "m " + (s % 60) + "s";
+}
+
+const ENDPOINTS = [
+  ["/search", "Find funds by name"],
+  ["/analyze/{code}", "Returns, volatility, Sharpe ratio, max drawdown and growth series"],
+  ["/simulate/{code}", "Backtest a SIP or lumpsum investment on real past NAVs"],
+];
+
+function BackendPanel() {
+  const [snap, setSnap] = useState(() => api.getStats());
+
+  useEffect(() => {
+    const timer = setInterval(() => setSnap(api.getStats()), 1500);
+    return () => clearInterval(timer);
+  }, []);
+
+  function clear() {
+    api.clearCache();
+    setSnap(api.getStats());
+  }
+
+  return (
+    <div className="backend">
+      <section className="panel">
+        <div className="be-head">
+          <div>
+            <h2 className="be-title">Backend</h2>
+            <div className="be-status"><span className="dot" />Online, running in this browser tab</div>
+          </div>
+          <button className="ghost" onClick={clear}>Clear cache</button>
+        </div>
+        <p className="calc-note">
+          GitHub Pages cannot run a Python server, so the backend logic runs here in your browser. It is
+          the same maths as the FastAPI backend in this repository, and it reads fund data from the public
+          MFapi.in API. Use the App tab and watch this page update.
+        </p>
+        <div className="grid5">
+          <Stat label="Uptime" value={fmtUptime(snap.uptimeSeconds)} />
+          <Stat label="Requests" value={snap.total} />
+          <Stat label="Errors" value={snap.errors} valueTone={snap.errors > 0 ? "neg" : ""} />
+          <Stat label="Average speed" value={snap.avgMs + " ms"} />
+          <Stat label="Funds cached" value={snap.cached} />
+        </div>
+      </section>
+
+      <div className="two-col">
+        <section className="panel">
+          <h3 className="section first">Recently analysed funds</h3>
+          <div className="scroll-x">
+            <table className="t">
+              <thead>
+                <tr><th>Fund</th><th>1Y</th><th>Sharpe</th><th>Time</th></tr>
+              </thead>
+              <tbody>
+                {snap.analyzed.map((f) => (
+                  <tr key={f.code}>
+                    <td>{f.name || f.code}</td>
+                    <td>{pct(f.return1y)}</td>
+                    <td>{f.sharpe == null ? "N/A" : f.sharpe}</td>
+                    <td>{f.at}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {snap.analyzed.length === 0 && <p className="muted">No funds analysed yet. Pick one in the App tab.</p>}
+        </section>
+
+        <section className="panel">
+          <h3 className="section first">Recent requests</h3>
+          <div className="scroll-x">
+            <table className="t">
+              <thead>
+                <tr><th>Time</th><th>Request</th><th>Status</th><th>Speed</th></tr>
+              </thead>
+              <tbody>
+                {snap.recent.map((r, i) => (
+                  <tr key={r.time + r.path + i}>
+                    <td>{r.time}</td>
+                    <td>{r.method + " " + r.path}</td>
+                    <td className={r.status >= 400 ? "neg" : ""}>{r.status}</td>
+                    <td>{r.ms} ms</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {snap.recent.length === 0 && <p className="muted">No requests yet.</p>}
+        </section>
+      </div>
+
+      <section className="panel" style={{ marginTop: 20 }}>
+        <h3 className="section first">Endpoints</h3>
+        <table className="t">
+          <thead>
+            <tr><th>Endpoint</th><th>What it does</th></tr>
+          </thead>
+          <tbody>
+            {ENDPOINTS.map(([path, what]) => (
+              <tr key={path}>
+                <td><code>{"GET " + path}</code></td>
+                <td>{what}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
+  const [view, setView] = useState("app");
   const [theme, setTheme] = useState(() =>
     window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
       ? "dark"
@@ -108,12 +223,10 @@ export default function App() {
     setLoading("search");
     setError("");
     try {
-      const res = await fetch(`${API}/search?q=${encodeURIComponent(text)}`);
-      if (!res.ok) throw new Error();
-      setResults(await res.json());
+      setResults(await api.search(text));
       setSearched(true);
-    } catch {
-      setError("Could not reach the backend. Check that it is running on port 8000.");
+    } catch (e) {
+      setError(e.message || "Could not search. Try again.");
     } finally {
       setLoading("");
     }
@@ -126,11 +239,9 @@ export default function App() {
     setData(null);
     setRange("ALL");
     try {
-      const res = await fetch(`${API}/analyze/${code}`);
-      if (!res.ok) throw new Error();
-      setData(await res.json());
-    } catch {
-      setError("Could not analyse this fund. Try another one.");
+      setData(await api.analyze(code));
+    } catch (e) {
+      setError(e.message || "Could not analyse this fund. Try another one.");
     } finally {
       setLoading("");
     }
@@ -188,13 +299,7 @@ export default function App() {
       setSimLoading(true);
       setSimError("");
       try {
-        const res = await fetch(
-          `${API}/simulate/${selected}?mode=${mode}&amount=${amt}&years=${activeYears}`
-        );
-        const body = await res.json();
-        if (!res.ok) {
-          throw new Error(typeof body.detail === "string" ? body.detail : "Could not run the calculation.");
-        }
+        const body = await api.simulate(selected, mode, amt, activeYears);
         if (!cancelled) setSim(body);
       } catch (e) {
         if (!cancelled) {
@@ -224,6 +329,14 @@ export default function App() {
         <div>
           <h1>Fund Analyzer</h1>
           <p className="sub">Past performance of Indian mutual funds, worked out from public NAV data.</p>
+          <div className="tabs" role="group" aria-label="Choose a view">
+            <button className={view === "app" ? "on" : ""} aria-pressed={view === "app"} onClick={() => setView("app")}>
+              App
+            </button>
+            <button className={view === "backend" ? "on" : ""} aria-pressed={view === "backend"} onClick={() => setView("backend")}>
+              Backend
+            </button>
+          </div>
         </div>
         <button
           className="ghost"
@@ -234,9 +347,11 @@ export default function App() {
         </button>
       </header>
 
-      {error && <div className="alert" role="alert">{error}</div>}
+      {view === "backend" && <BackendPanel />}
 
-      <div className="layout">
+      {view === "app" && error && <div className="alert" role="alert">{error}</div>}
+
+      <div className="layout" hidden={view !== "app"}>
         <aside className="panel finder">
           <label className="field-label" htmlFor="fund-search">Find a fund</label>
           <div className="search-row">
@@ -661,7 +776,27 @@ select { width: 100%; padding: 10px 12px; border: 1px solid var(--border); borde
 @media (max-width: 600px) {
   .calc-inputs { grid-template-columns: 1fr; }
 }
+.layout[hidden] { display: none; }
+.tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-top: 14px; }
+.tabs button { background: transparent; color: var(--text); border: 0; padding: 8px 18px; }
+.tabs button.on { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.backend { max-width: 1200px; margin: 0 auto; }
+.be-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.be-title { margin: 0 0 6px; font-size: 22px; }
+.be-status { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--pos); display: inline-block; }
+.grid5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 8px; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; align-items: start; }
+.section.first { margin-top: 0; }
+.scroll-x { overflow-x: auto; }
+table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.t th, table.t td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+table.t th { color: var(--muted); font-weight: 600; font-size: 13px; }
+table.t td.neg { color: var(--neg); }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
 @media (max-width: 900px) {
+  .grid5 { grid-template-columns: repeat(2, 1fr); }
+  .two-col { grid-template-columns: 1fr; }
   .layout { grid-template-columns: 1fr; }
   .grid4 { grid-template-columns: repeat(2, 1fr); }
   .grid3 { grid-template-columns: 1fr; }
